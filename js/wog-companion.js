@@ -865,12 +865,49 @@ function webDisabled(action) {
 
             // 通用融合执行：对指定 content type + 档位，反复「凑满一组 -> 提交」，直到凑不齐为止。
             // contentType: 1=装备 2=首饰；needCnt: 装备 6 件 / 首饰 3 件（跟融合表的 MaterialRatingCnt 一致）
+            //
+            // 2026-11-13 重写：原来用 collectAutoRegisterCandidates(...).filter(ratingType===rating)
+            // 做预筛 + raw.length 门槛 + 手工 lockFusionTable/fillFusionSlots，在同阶混等级时
+            // 全程凑不满 -> fused 恒为 0（背包/仓库爆满 180 件却一件不合）。
+            // 实测（_do_fuse.py）只要走「clear -> autoRegisterFusion -> isFusionStagingFull
+            // -> reqFusionStagedAsync」这条纯内核路径，一次就 fused 14、物品 180→119。
+            // 所以 !sameLevelOnly 直接复刻这条已实证的干净路径；sameLevelOnly 才保留手工按等级分组。
             const runFusionPass = async (contentType, rating, needCnt, sameLevelOnly, historyType, maxRounds) => {
               if (!sWorkshop) return 0;
               const limit = maxRounds || 10;
               sWorkshop.setFusionContentType(contentType);
+              sWorkshop.setAutoRegisterIncludeStorage('Fusion', true);
               sWorkshop.setAutoRegisterRating('Fusion', rating);
               let done = 0;
+
+              // 不限制同等级：完全交给游戏内核自动登记，最稳（已实证）
+              if (!sameLevelOnly) {
+                while (done < limit) {
+                  sWorkshop.clearFusionStaging();
+                  let n = 0;
+                  try { n = sWorkshop.autoRegisterFusion(); } catch (e) { break; }
+                  let full = false;
+                  try { full = sWorkshop.isFusionStagingFull(); } catch (e) { break; }
+                  if (!full) { sWorkshop.clearFusionStaging(); break; }
+                  let fusionRes = null;
+                  try { fusionRes = await sWorkshop.reqFusionStagedAsync(); } catch (e) { sWorkshop.clearFusionStaging(); break; }
+                  if (fusionRes && fusionRes.length > 0) {
+                    done++;
+                    const rTid = fusionRes[0].tid;
+                    const rInfo = nn.db.equip.get(rTid) || nn.db.item.get(rTid);
+                    const rLoc = nn.db.locale.get(rInfo && rInfo.ItemName);
+                    const rName = (rLoc && (rLoc.ZH || rLoc.CN || rLoc.EN)) || (rInfo && rInfo.ItemName) || ('TID ' + rTid);
+                    jewelData.fusedHistory.push({ type: historyType, name: rName, tid: rTid });
+                  } else {
+                    sWorkshop.clearFusionStaging();
+                    break;
+                  }
+                }
+                sWorkshop.clearFusionStaging();
+                return done;
+              }
+
+              // 限制同等级：按等级分组手工填表（保留原行为，供 T3 同阶同级合成用）
               while (done < limit) {
                 const raw = sWorkshop.collectAutoRegisterCandidates(
                   'Fusion',
@@ -878,48 +915,33 @@ function webDisabled(action) {
                   true,
                   { rating: rating }
                 ).filter(c => c.ratingType === rating);
-
                 if (raw.length < needCnt) break;
 
-                let candidates;
-                if (sameLevelOnly) {
-                  const byLevel = new Map();
-                  for (let c of raw) {
-                    const lv = resolveItemLevel(c.itemTid, c.itemId);
-                    if (!byLevel.has(lv)) byLevel.set(lv, []);
-                    byLevel.get(lv).push(c);
-                  }
-                  let selected = null;
-                  for (let lv of Array.from(byLevel.keys()).sort((a, b) => b - a)) {
-                    const grp = byLevel.get(lv);
-                    if (grp.length >= needCnt) { selected = grp; break; }
-                  }
-                  if (!selected) break; // 没有任何一档能凑满，收工
-                  candidates = selected.slice(0, needCnt);
-                } else {
-                  candidates = raw.slice(0, needCnt);
+                const byLevel = new Map();
+                for (let c of raw) {
+                  const lv = resolveItemLevel(c.itemTid, c.itemId);
+                  if (!byLevel.has(lv)) byLevel.set(lv, []);
+                  byLevel.get(lv).push(c);
                 }
+                let selected = null;
+                for (let lv of Array.from(byLevel.keys()).sort((a, b) => b - a)) {
+                  const grp = byLevel.get(lv);
+                  if (grp.length >= needCnt) { selected = grp; break; }
+                }
+                if (!selected) break;
+                const candidates = selected.slice(0, needCnt);
 
                 let table = null;
                 for (let c of candidates) {
                   const ft = sWorkshop.resolveFusionTableByItem(c.itemTid, c.itemId);
                   if (ft && ft.MaterialRating === rating) { table = ft; break; }
                 }
+                if (!table) break;
 
-                if (table) {
-                  sWorkshop.clearFusionStaging();
-                  sWorkshop.lockFusionTable(table);
-                  sWorkshop.fillFusionSlots(table, candidates);
-                } else if (!sameLevelOnly) {
-                  sWorkshop.autoRegisterFusion();
-                } else {
-                  break;
-                }
-
-                if (!sWorkshop.isFusionStagingFull()) {
-                  sWorkshop.clearFusionStaging();
-                  break;
-                }
+                sWorkshop.clearFusionStaging();
+                sWorkshop.lockFusionTable(table);
+                sWorkshop.fillFusionSlots(table, candidates);
+                if (!sWorkshop.isFusionStagingFull()) { sWorkshop.clearFusionStaging(); break; }
 
                 const fusionRes = await sWorkshop.reqFusionStagedAsync();
                 if (fusionRes && fusionRes.length > 0) {
@@ -934,6 +956,7 @@ function webDisabled(action) {
                   break;
                 }
               }
+              sWorkshop.clearFusionStaging();
               return done;
             };
 
@@ -1306,21 +1329,19 @@ function webDisabled(action) {
 
             // 低阶（R1/R2 装备）能凑出几组：页面用它决定「仓库要不要清」。
             // 只做纯计数，不调用任何游戏 API，避免再依赖 storageUsed（那个值偶尔会偏）。
+            // 2026-11-13 修正：fuseLow 命令的 sameLevelOnly 改为 false（见 1868 行），
+            // 这里必须改成「按阶计数」而不是「按阶+按等级分组计数」，否则同一批材料
+            // 被等级拆散后每组都不足 6，lowFuseReady 恒为 0，fuseLow 永远不触发。
             try {
-              const lowByRating = { 1: {}, 2: {} };
+              const lowByRating = { 1: 0, 2: 0 };
               for (let it of allNotStack) {
                 if (it.isLock || (it.location !== 1 && it.location !== 2)) continue;
                 const de = nn.db.equip.get(it.itemTid);
                 if (!de || de.EquipType !== 1 || (de.RatingType !== 1 && de.RatingType !== 2)) continue;
-                const lv = resolveItemLevel(it.itemTid, it.itemId);
-                lowByRating[de.RatingType][lv] = (lowByRating[de.RatingType][lv] || 0) + 1;
+                lowByRating[de.RatingType] += 1;
               }
               let lowGroups = 0;
-              for (const r of [1, 2]) {
-                for (const lv of Object.keys(lowByRating[r])) {
-                  lowGroups += Math.floor(lowByRating[r][lv] / 6);
-                }
-              }
+              for (const r of [1, 2]) lowGroups += Math.floor(lowByRating[r] / 6);
               jewelData.lowFuseReady = lowGroups;
             } catch (eLow) {
               jewelData.lowFuseReady = 0;
@@ -1865,7 +1886,11 @@ function webDisabled(action) {
               fromRating: 1,
               toRating: 2,
               maxRounds: 3,
-              sameLevelOnly: true
+              // 2026-11-13 修正：原本写死 true，要求「同阶+同等级」6 件才动手。
+              // 实测 180 件物品按等级一分散，每档都不足 6，背包/仓库爆满仍 fused:0。
+              // 改 false 后交给游戏内核 autoRegisterFusion() 按 GroupID+baseLimitLevel 分组，
+              // 同阶混等级也能凑齐，真正把低阶合掉腾出格子。
+              sameLevelOnly: false
             }, 'equipment-fusion-t3-auto');
           }
         }
