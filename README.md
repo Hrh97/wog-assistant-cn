@@ -67,6 +67,22 @@ python start.py
 
 ---
 
+## 内核自动化工具（不挂网页也能跑）
+
+网页里的自动化全部是浏览器 `setInterval` —— 关掉页面 / 浏览器回收标签页，定时器就没了。如果你只想要稳定的**内核级合成与技能点加点**、不想一直挂着一个网页，用仓库里的 [`wog_kernel_tools.py`](KERNEL_TOOLS.md)：
+
+```bash
+python wog_kernel_tools.py check                 # 只读体检：连通性 / SP / 战场累计
+python wog_kernel_tools.py fuse --dry           # 按 GroupID 分组合成，只报告不写
+python wog_kernel_tools.py fuse --budget 8      # 真提交，最多 8 组
+python wog_kernel_tools.py skill --dry --budget 40   # 技能树 SP 加点计划
+python wog_kernel_tools.py skill --once --budget 6    # 真加 6 点，渐进
+```
+
+跨平台、零依赖、只用 Python 标准库，直连本机 `ws://127.0.0.1:10998`（同样要先开端口）。它绕开两个实测的游戏内核坑：① 内置自动融合 section 把 T1 材料排除导致低阶装备/宝玉堆仓库；② 页面技能树「自动加点」只改本地规划、没接写游戏的自动循环。详见 [KERNEL_TOOLS.md](KERNEL_TOOLS.md)。
+
+---
+
 ## 关于网页版
 
 这个仓库也放了纯静态页面，可以直接托管。
@@ -95,6 +111,10 @@ js/wog-battle.js     战斗 / 战场
 js/wog-auto.js       训练所自动加点
 js/wog-connector.js  连接器下载与状态检测
 js/wog-popup.js      游戏弹窗自动处理
+wog_kernel_tools.py  内核自动化工具（分组合成 / 技能点 SP 加点 / 只读体检）
+KERNEL_TOOLS.md      内核自动化工具的技术说明与用法
+AUTO_FUSION_FIX.md   自动融合修复说明
+CHANGELOG.md         版本变更记录
 start.py             本地静态服务（带 /api/status、/api/patch）
 launcher.py          打包入口
 build_exe.py         打 exe 的脚本
