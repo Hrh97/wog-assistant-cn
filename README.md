@@ -81,6 +81,21 @@ python wog_kernel_tools.py skill --once --budget 6    # 真加 6 点，渐进
 
 跨平台、零依赖、只用 Python 标准库，直连本机 `ws://127.0.0.1:10998`（同样要先开端口）。它绕开两个实测的游戏内核坑：① 内置自动融合 section 把 T1 材料排除导致低阶装备/宝玉堆仓库；② 页面技能树「自动加点」只改本地规划、没接写游戏的自动循环。详见 [KERNEL_TOOLS.md](KERNEL_TOOLS.md)。
 
+### 常驻守卫：掉页也不停
+
+网页自动化全靠浏览器 `setInterval`，**页面一被回收就全停**（浏览器休眠、ego lite 自升版本、标签被关）。
+实测踩过：以为在挂机，实际 2 小时 49 分零连接；56 小时日志里掉页 95 次，其中 89 次间隔精确是 30 分 10 秒。
+
+[`wog_watchdog.py`](WATCHDOG.md) 补上这一层：
+
+```bash
+python wog_watchdog.py              # 常驻：保活 + 内核合成 + SP 加点 + ego 版本哨兵
+python wog_watchdog.py --selftest   # 三路连通性自检
+```
+
+四职责：20s 巡检掉页自动重拉、90s 起分组合成（无产出退避到 300s）、120s 起 SP 加点（退避到 1800s）、
+600s 检查 ego lite 版本变化。实测把空转 89.5%/99.2% 的无效内核连接压掉 70%/93%。详见 [WATCHDOG.md](WATCHDOG.md)。
+
 ---
 
 ## 关于网页版
@@ -112,7 +127,10 @@ js/wog-auto.js       训练所自动加点
 js/wog-connector.js  连接器下载与状态检测
 js/wog-popup.js      游戏弹窗自动处理
 wog_kernel_tools.py  内核自动化工具（分组合成 / 技能点 SP 加点 / 只读体检）
+wog_watchdog.py      常驻守卫（掉页自动重拉 + 内核合成 + SP 加点 + 版本哨兵）
+attach-ego-space.mjs 把助手页挂进 ego lite 的 Agent Space 常驻
 KERNEL_TOOLS.md      内核自动化工具的技术说明与用法
+WATCHDOG.md          常驻守卫的技术说明与用法
 AUTO_FUSION_FIX.md   自动融合修复说明
 CHANGELOG.md         版本变更记录
 start.py             本地静态服务（带 /api/status、/api/patch）
